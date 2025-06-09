@@ -5,8 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 type Config_t struct {
@@ -66,17 +71,42 @@ type Outage_t struct {
 	ErrorMessages []any `json:"errorMessages"`
 }
 
+type Geocode_t struct {
+	PlaceID     int    `json:"place_id"`
+	Licence     string `json:"licence"`
+	OsmType     string `json:"osm_type"`
+	OsmID       int64  `json:"osm_id"`
+	Lat         string `json:"lat"`
+	Lon         string `json:"lon"`
+	DisplayName string `json:"display_name"`
+	Address     struct {
+		HouseNumber  string `json:"house_number"`
+		Road         string `json:"road"`
+		Town         string `json:"town"`
+		County       string `json:"county"`
+		State        string `json:"state"`
+		ISO31662Lvl4 string `json:"ISO3166-2-lvl4"`
+		Postcode     string `json:"postcode"`
+		Country      string `json:"country"`
+		CountryCode  string `json:"country_code"`
+	} `json:"address"`
+	Boundingbox []string `json:"boundingbox"`
+}
+
 const ConfigUrl = "https://outagemap.duke-energy.com/config/config.prod.json"
 const CountiesUrl = "https://prod.apigee.duke-energy.app/outage-maps/v1/counties?jurisdiction=DEF"
 const OutageUrl = "https://prod.apigee.duke-energy.app/outage-maps/v1/outages?jurisdiction=DEF"
+
+// const GeoCodeUrl = "https://geocode.maps.co/reverse?lat=&lon=&api_key="
 
 func FetchAndUnmarshal[T any](url string, authHeader string) (*T, error) {
 	request, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-
-	request.Header.Add("Authorization", authHeader)
+	if authHeader != "" {
+		request.Header.Add("Authorization", authHeader)
+	}
 
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
@@ -100,7 +130,12 @@ func main() {
 	// config_url := "https://outagemap.duke-energy.com/config/config.prod.json"
 	// counties_url := "https://prod.apigee.duke-energy.app/outage-maps/v1/counties?jurisdiction=DEF"
 	// outage_url := "https://prod.apigee.duke-energy.app/outage-maps/v1/outages?jurisdiction=DEF"
-	serviceArea := []string{""}
+	err := godotenv.Load(".env")
+	if err != nil {
+		log.Fatal(err)
+	}
+	serviceArea := strings.Split(os.Getenv("SERVICE_AREA"), ",")
+	apiKey := os.Getenv("API_KEY")
 
 	var config Config_t
 	// var county County_t
@@ -185,9 +220,29 @@ func main() {
 		// https: //www.google.com/maps/search/41.36595626517665,+-108.70481231362976?sa=X&ved=1t:242&ictx=111
 	}
 	for _, o := range outage.Data {
+		geocodeUrl := fmt.Sprintf("https://geocode.maps.co/reverse?lat=%f&lon=%f&api_key=%s", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation, apiKey)
 
-		fmt.Printf("\nLatitude %f\nLongitude %f\nCustomers Affected: %d\nEvent ID: %s\nOutage Type: %s\n", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation, o.CustomersAffectedNumber, o.SourceEventNumber, o.OutageCause)
-		outageUrl := fmt.Sprintf("https://www.google.com/maps/search/%f,+%f?sa=X&ved=1t:242&ictx=111\n", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation)
-		fmt.Printf("Outage Location URL: " + outageUrl)
+		// fmt.Printf("%s\n", geocodeUrl)
+
+		rGeocodedData, err := FetchAndUnmarshal[Geocode_t](geocodeUrl, "")
+		if err != nil {
+			log.Fatal(err)
+		}
+		time.Sleep(1 * time.Second)
+
+		list := strings.Fields(rGeocodedData.Address.County)
+		for _, x := range serviceArea {
+			if list[0] == x {
+				print(x)
+				fmt.Printf("\nLatitude %f\nLongitude %f\nCustomers Affected: %d\nEvent ID: %s\nOutage Type: %s\n", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation, o.CustomersAffectedNumber, o.SourceEventNumber, o.OutageCause)
+				outageUrl := fmt.Sprintf("https://www.google.com/maps/search/%f,+%f?sa=X&ved=1t:242&ictx=111\n", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation)
+				fmt.Printf("Outage Location URL: " + outageUrl)
+				fmt.Printf("Address of Outage: %s %s, %s", rGeocodedData.Address.HouseNumber, rGeocodedData.Address.Road, rGeocodedData.Address.Town)
+			} else {
+				continue
+			}
+		}
+
 	}
+
 }
