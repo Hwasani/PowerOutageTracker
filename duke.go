@@ -100,6 +100,7 @@ func main() {
 	// config_url := "https://outagemap.duke-energy.com/config/config.prod.json"
 	// counties_url := "https://prod.apigee.duke-energy.app/outage-maps/v1/counties?jurisdiction=DEF"
 	// outage_url := "https://prod.apigee.duke-energy.app/outage-maps/v1/outages?jurisdiction=DEF"
+	serviceArea := []string{""}
 
 	var config Config_t
 	// var county County_t
@@ -167,19 +168,26 @@ func main() {
 	}
 
 	for _, c := range county.Data {
+		for _, x := range serviceArea {
+			if c.CountyName == x {
+				if c.AreaOfInterestSummary.ActiveEventsCount > 0 {
+					fmt.Printf("%s, Customers Served: %d, Active Outage Count: %d, Customers Affected: %d\n", c.AreaOfInterestName, c.CustomersServed, c.AreaOfInterestSummary.ActiveEventsCount, c.AreaOfInterestSummary.MaxCustomersAffected)
+				} else {
+					fmt.Printf("%s, Customers Served: %d No Active Outages\n", c.AreaOfInterestName, c.CustomersServed)
+				}
+				// fmt.Printf("%s\n", c.CountyName)
+			} else {
+				continue
+			}
 
-		if c.AreaOfInterestSummary.ActiveEventsCount > 0 {
-			fmt.Printf("%s, Customers Served: %d, Active Outage Count: %d, Customers Affected: %d\n", c.AreaOfInterestName, c.CustomersServed, c.AreaOfInterestSummary.ActiveEventsCount, c.AreaOfInterestSummary.MaxCustomersAffected)
-		} else {
-			fmt.Printf("%s, Customers Served: %d No Active Outages\n", c.AreaOfInterestName, c.CustomersServed)
 		}
 
+		// https: //www.google.com/maps/search/41.36595626517665,+-108.70481231362976?sa=X&ved=1t:242&ictx=111
 	}
 	for _, o := range outage.Data {
 
 		fmt.Printf("\nLatitude %f\nLongitude %f\nCustomers Affected: %d\nEvent ID: %s\nOutage Type: %s\n", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation, o.CustomersAffectedNumber, o.SourceEventNumber, o.OutageCause)
-		fmt.Printf("Outage Location URL: https://www.google.com/maps/search/%f,+%f?sa=X&ved=1t:242&ictx=111\n", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation)
+		outageUrl := fmt.Sprintf("https://www.google.com/maps/search/%f,+%f?sa=X&ved=1t:242&ictx=111\n", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation)
+		fmt.Printf("Outage Location URL: " + outageUrl)
 	}
-	// https: //www.google.com/maps/search/41.36595626517665,+-108.70481231362976?sa=X&ved=1t:242&ictx=111
-
 }
