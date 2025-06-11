@@ -139,23 +139,51 @@ func main() {
 	c_url := CountiesUrl + jurisdiction
 	o_url := OutageUrl + jurisdiction
 
-	// Init sqlite table
-	db, err := sql.Open("sqlite3", "./outages.db")
+	// Init outage table
+	outageDb, err := sql.Open("sqlite3", "./outages.db")
 	if err != nil {
 		print("1")
 	}
-	defer db.Close()
+	defer outageDb.Close()
 
-	initTable := `
+	initOutageTable := `
 	CREATE TABLE IF NOT EXISTS outages (
-	id INTEGER NOT NULL PRIMARY KEY,
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+	event_id INTEGER NOT NULL,
 	county TEXT,
 	customers_affected INTEGER NOT NULL
 	);`
 
-	_, err = db.Exec(initTable)
+	_, err = outageDb.Exec(initOutageTable)
 	if err != nil {
 		print("2")
+	}
+	sql_, err := outageDb.Exec("PRAGMA foreign_keys = ON")
+	if err != nil {
+		log.Fatal("Failed to enable foreign keys:", err)
+	}
+	log.Print(sql_)
+
+	// Init outage coordinates table
+
+	coordDb, err := sql.Open("sqlite3", "./coordinates.db")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer coordDb.Close()
+
+	initCordsTable := `
+	CREATE TABLE IF NOT EXISTS coordinates (
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+	event_id INTEGER NOT NULL,
+	lat REAL NOT NULL,
+	lon REAL NOT NULL,
+	FOREIGN KEY (event_id) REFERENCES outages(event_id) ON DELETE CASCADE
+	);`
+
+	_, err = coordDb.Exec(initCordsTable)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	var config Config_t
@@ -227,11 +255,19 @@ func main() {
 		list := strings.Fields(rGeocodedData.Address.County)
 		for _, x := range serviceArea {
 			if list[0] == x {
-				print(rGeocodedData.Address.County)
-				_, err := db.Exec("INSERT INTO outages (id, county, customers_affected) VALUES(?, ?, ?)", o.SourceEventNumber, list[0], o.CustomersAffectedNumber)
+				println(rGeocodedData.Address.County)
+				_, err := outageDb.Exec("INSERT OR REPLACE INTO outages (event_id, county, customers_affected) VALUES(?, ?, ?)", o.SourceEventNumber, list[0], o.CustomersAffectedNumber)
 				if err != nil {
 					log.Fatal(err)
 				}
+				var convexHull = o.ConvexHull
+				for _, j := range convexHull {
+					_, err := coordDb.Exec("INSERT OR REPLACE INTO coordinates (event_id, lat, lon) VALUES(?,?,?)", o.SourceEventNumber, j.Lat, j.Lng)
+					if err != nil {
+						log.Fatal(err)
+					}
+				}
+
 				fmt.Printf("\nLatitude %f\nLongitude %f\nCustomers Affected: %d\nEvent ID: %s\nOutage Type: %s\n", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation, o.CustomersAffectedNumber, o.SourceEventNumber, o.OutageCause)
 				outageUrl := fmt.Sprintf("https://www.google.com/maps/search/%f,+%f?sa=X&ved=1t:242&ictx=111\n", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation)
 				fmt.Printf("Outage Location URL: " + outageUrl)
@@ -239,7 +275,6 @@ func main() {
 				for _, y := range o.ConvexHull {
 					fmt.Printf("%f\n", y)
 				}
-
 			} else {
 				continue
 			}
