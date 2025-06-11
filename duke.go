@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type Config_t struct {
@@ -94,15 +96,13 @@ type Geocode_t struct {
 }
 
 const ConfigUrl = "https://outagemap.duke-energy.com/config/config.prod.json"
-const CountiesUrl = "https://prod.apigee.duke-energy.app/outage-maps/v1/counties?jurisdiction=DEF"
-const OutageUrl = "https://prod.apigee.duke-energy.app/outage-maps/v1/outages?jurisdiction=DEF"
-
-// const GeoCodeUrl = "https://geocode.maps.co/reverse?lat=&lon=&api_key="
+const CountiesUrl = "https://prod.apigee.duke-energy.app/outage-maps/v1/counties?jurisdiction="
+const OutageUrl = "https://prod.apigee.duke-energy.app/outage-maps/v1/outages?jurisdiction="
 
 func FetchAndUnmarshal[T any](url string, authHeader string) (*T, error) {
 	request, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		log.Fatal(err)
 	}
 	if authHeader != "" {
 		request.Header.Add("Authorization", authHeader)
@@ -110,96 +110,96 @@ func FetchAndUnmarshal[T any](url string, authHeader string) (*T, error) {
 
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		return nil, err
+		log.Fatal(err)
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return nil, err
+		log.Fatal(err)
 	}
 
 	var jsonBytes T
 	if err := json.Unmarshal(body, &jsonBytes); err != nil {
-		return nil, err
+		log.Fatal(err)
 	}
 
 	return &jsonBytes, nil
 }
 
 func main() {
-	// config_url := "https://outagemap.duke-energy.com/config/config.prod.json"
-	// counties_url := "https://prod.apigee.duke-energy.app/outage-maps/v1/counties?jurisdiction=DEF"
-	// outage_url := "https://prod.apigee.duke-energy.app/outage-maps/v1/outages?jurisdiction=DEF"
 	err := godotenv.Load(".env")
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// Init env var
 	serviceArea := strings.Split(os.Getenv("SERVICE_AREA"), ",")
 	apiKey := os.Getenv("API_KEY")
+	jurisdiction := os.Getenv("JURISDICTION")
+	c_url := CountiesUrl + jurisdiction
+	o_url := OutageUrl + jurisdiction
+
+	// Init sqlite table
+	db, err := sql.Open("sqlite3", "./outages.db")
+	if err != nil {
+		print("1")
+	}
+	defer db.Close()
+
+	initTable := `
+	CREATE TABLE IF NOT EXISTS outages (
+	id INTEGER NOT NULL PRIMARY KEY,
+	county TEXT,
+	customers_affected INTEGER NOT NULL
+	);`
+
+	_, err = db.Exec(initTable)
+	if err != nil {
+		print("2")
+	}
 
 	var config Config_t
-	// var county County_t
 
 	request, err := http.Get(ConfigUrl)
 	if err != nil {
-		fmt.Println("Error: ", err)
-		return
+		print("3")
 	}
 
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
-		fmt.Println("Error 2: ", err)
-		return
+		print("4")
 	}
 
 	err = json.Unmarshal(body, &config)
 	if err != nil {
-		fmt.Print(err)
-		return
+		print("5")
 	}
 
 	authKey := []byte(config.Consumer_key_emp + ":" + config.Consumer_secret_emp)
 	authHeader := "Basic " + base64.StdEncoding.EncodeToString(authKey)
 
-	// this is where we will repeat the get counties/outages functions
-
-	countiesResponse, err := http.NewRequest(http.MethodGet, CountiesUrl, nil)
+	countiesResponse, err := http.NewRequest(http.MethodGet, c_url, nil)
 	if err != nil {
-		fmt.Print(err)
-		return
+		print("6")
 	}
 
 	countiesResponse.Header.Add("Authorization", authHeader)
 
-	outagesResponse, err := http.NewRequest(http.MethodGet, OutageUrl, nil)
+	outagesResponse, err := http.NewRequest(http.MethodGet, o_url, nil)
 	if err != nil {
-		fmt.Print(err)
-		return
+		print("7")
 	}
 
 	outagesResponse.Header.Add("Authorization", authHeader)
-	// the plan is to get the JSON data from this GET request, then get the lo la of the outages and map them in google maps or duke.
-	// That way if theres an outage we should be aware of we can just click that and know at a glance
 
-	// response, err := http.DefaultClient.Do(countiesResponse)
-	// if err != nil {
-	// 	print(err)
-	// 	return
-	// }
-	// responseBody, err := io.ReadAll(response.Body)
-	// if err != nil {
-	// 	fmt.Print(err)
-	// 	return
-	// }
-
-	county, err := FetchAndUnmarshal[County_t](CountiesUrl, authHeader)
+	county, err := FetchAndUnmarshal[County_t](c_url, authHeader)
 	if err != nil {
-		print(err)
+		print("8")
 	}
 
-	outage, err := FetchAndUnmarshal[Outage_t](OutageUrl, authHeader)
+	outage, err := FetchAndUnmarshal[Outage_t](o_url, authHeader)
 	if err != nil {
-		print(err)
+		print("9")
 	}
 
 	for _, c := range county.Data {
@@ -210,34 +210,36 @@ func main() {
 				} else {
 					fmt.Printf("%s, Customers Served: %d No Active Outages\n", c.AreaOfInterestName, c.CustomersServed)
 				}
-				// fmt.Printf("%s\n", c.CountyName)
 			} else {
 				continue
 			}
-
 		}
-
-		// https: //www.google.com/maps/search/41.36595626517665,+-108.70481231362976?sa=X&ved=1t:242&ictx=111
 	}
 	for _, o := range outage.Data {
 		geocodeUrl := fmt.Sprintf("https://geocode.maps.co/reverse?lat=%f&lon=%f&api_key=%s", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation, apiKey)
 
-		// fmt.Printf("%s\n", geocodeUrl)
-
 		rGeocodedData, err := FetchAndUnmarshal[Geocode_t](geocodeUrl, "")
 		if err != nil {
-			log.Fatal(err)
+			print("10")
 		}
 		time.Sleep(1 * time.Second)
 
 		list := strings.Fields(rGeocodedData.Address.County)
 		for _, x := range serviceArea {
 			if list[0] == x {
-				print(x)
+				print(rGeocodedData.Address.County)
+				_, err := db.Exec("INSERT INTO outages (id, county, customers_affected) VALUES(?, ?, ?)", o.SourceEventNumber, list[0], o.CustomersAffectedNumber)
+				if err != nil {
+					log.Fatal(err)
+				}
 				fmt.Printf("\nLatitude %f\nLongitude %f\nCustomers Affected: %d\nEvent ID: %s\nOutage Type: %s\n", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation, o.CustomersAffectedNumber, o.SourceEventNumber, o.OutageCause)
 				outageUrl := fmt.Sprintf("https://www.google.com/maps/search/%f,+%f?sa=X&ved=1t:242&ictx=111\n", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation)
 				fmt.Printf("Outage Location URL: " + outageUrl)
-				fmt.Printf("Address of Outage: %s %s, %s", rGeocodedData.Address.HouseNumber, rGeocodedData.Address.Road, rGeocodedData.Address.Town)
+				fmt.Printf("Address of Outage: %s %s, %s\n", rGeocodedData.Address.HouseNumber, rGeocodedData.Address.Road, rGeocodedData.Address.Town)
+				for _, y := range o.ConvexHull {
+					fmt.Printf("%f\n", y)
+				}
+
 			} else {
 				continue
 			}
