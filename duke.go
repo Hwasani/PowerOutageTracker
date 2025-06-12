@@ -183,11 +183,15 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to create table", err)
 	}
-	sql_, err := outageDb.Exec("PRAGMA foreign_keys = ON")
+	_, err = outageDb.Exec("PRAGMA foreign_keys = ON")
 	if err != nil {
 		log.Fatal("Failed to enable foreign keys:", err)
 	}
-	log.Print(sql_)
+
+	_, err = outageDb.Exec("PRAGMA journal_mode=WAL;")
+	if err != nil {
+		log.Fatal("Failed to set WAL mode:", err)
+	}
 
 	// Init outage coordinates table
 
@@ -212,11 +216,16 @@ func main() {
 		log.Fatal(err)
 	}
 
+	_, err = coordDb.Exec("PRAGMA journal_mode=WAL;")
+	if err != nil {
+		log.Fatal("Failed to set WAL mode:", err)
+	}
+
 	var config Config_t
 
 	request, err := http.Get(ConfigUrl)
 	if err != nil {
-		log.Fatal("Failed to reach %s. Check internet connection", ConfigUrl, err)
+		log.Fatal("Failed to reach config url. Check internet connection", err)
 	}
 
 	body, err := io.ReadAll(request.Body)
@@ -301,8 +310,8 @@ func main() {
 
 				fmt.Printf("\nLatitude %f\nLongitude %f\nCustomers Affected: %d\nEvent ID: %s\nOutage Type: %s\n", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation, o.CustomersAffectedNumber, o.SourceEventNumber, o.OutageCause)
 				outageUrl := fmt.Sprintf("https://www.google.com/maps/search/%f,+%f?sa=X&ved=1t:242&ictx=111\n", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation)
-				fmt.Printf("Outage Location URL: " + outageUrl)
-				fmt.Printf("Address of Outage: %s %s, %s\n", rGeocodedData.Address.HouseNumber, rGeocodedData.Address.Road, rGeocodedData.Address.Town)
+				fmt.Printf("Outage Location URL: %s", outageUrl)
+				// fmt.Printf("Address of Outage: %s %s, %s\n", rGeocodedData.Address.HouseNumber, rGeocodedData.Address.Road, rGeocodedData.Address.Town) I thought this would work but this really sucks at giving addresses.
 				for _, y := range o.ConvexHull {
 					fmt.Printf("%f\n", y)
 				}
@@ -316,7 +325,8 @@ func main() {
 		log.Fatal("Event_ID not in outageDB", err)
 	}
 	defer outageRows.Close()
-
+	var count = 0
+	fmt.Printf("Starting check for cleared outages.\n")
 	for outageRows.Next() {
 		var dbEventId string
 		if err := outageRows.Scan(&dbEventId); err != nil {
@@ -324,24 +334,21 @@ func main() {
 		}
 
 		if !parsedOutage[dbEventId] {
-			log.Printf("Deactivating outage: %s", dbEventId)
+			log.Printf("Deactivating outage: %s\n", dbEventId)
 
 			_, err := outageDb.Exec("UPDATE outages SET active = 0 WHERE event_id = ?", dbEventId)
 			if err != nil {
-				log.Fatal("Failed to deactivate event %s", dbEventId, err)
+				log.Fatalf("Failed to deactivate event %s from outageDb %v\n", dbEventId, err)
 			}
 
-			_, err = coordDb.Exec("UPDATE outages SET active = 0 WHERE event_id = ?", dbEventId)
+			_, err = coordDb.Exec("UPDATE coordinates SET active = 0 WHERE event_id = ?", dbEventId)
 			if err != nil {
-				log.Fatal("Failed to deactivate event %s", dbEventId, err)
+				log.Fatalf("Failed to deactivate event %s from coordDb %v\n", dbEventId, err)
 			}
+			count += 1
 		}
 	}
+	fmt.Printf("Finished checking for cleared outages.\n")
 
-	for x, y := range parsedOutage {
-
-		fmt.Printf("source event id: %s\n active: %v\n", x, y)
-	}
-	fmt.Printf("Len of parsedOutages %d\n", len(parsedOutage))
-
+	fmt.Printf("Total count of outages cleared: %d\n", count)
 }

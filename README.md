@@ -7,6 +7,6 @@ SERVICE_AREA=County0,County1,County2
 JURISDICTION=DEF (This is for the Florida jursidiction)  
 CGO_ENABLED=1  
   
-Requires these imports and their dependencies 
+Requires these imports and their dependencies  
 github.com/joho/godotenv  
 github.com/mattn/go-sqlite3  
