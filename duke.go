@@ -126,6 +126,30 @@ func FetchAndUnmarshal[T any](url string, authHeader string) (*T, error) {
 	return &jsonBytes, nil
 }
 
+// Kind of an ambitious way to update these dbs. I didnt have it squared away how I was going to mark these outages as active or not yet
+
+// func ActiveScanLoop(outageDataBase *sql.DB, cordDataBase *sql.DB, tableName string, sourceEvent string) {
+// 	for {
+// 		var eventID string
+// 		err := outageDataBase.QueryRow("SELECT event_id FROM outages WHERE event_id = ?", sourceEvent).Scan(&eventID)
+// 		if err == sql.ErrNoRows {
+// 			_, execErr := outageDataBase.Exec("UPDATE outages SET active = 0 WHERE event_id = ?", sourceEvent)
+// 			if execErr != nil {
+// 				log.Printf("Insert failed: %v\n", execErr)
+// 			} else {
+// 				log.Printf("Deactivated event: %s\n", sourceEvent)
+// 				_, err := cordDataBase.Exec("UPDATE coordinates SET active = 0 WHERE event_id = ?", sourceEvent)
+// 				if err != nil {
+// 					log.Printf("Error updating active field in coordinates table %e", err)
+// 				}
+// 			}
+// 		} else if err != nil {
+// 			log.Printf("Query failed: %v\n", err)
+// 		}
+// 		time.Sleep(1 * time.Second)
+// 	}
+// }
+
 func main() {
 	err := godotenv.Load(".env")
 	if err != nil {
@@ -142,13 +166,14 @@ func main() {
 	// Init outage table
 	outageDb, err := sql.Open("sqlite3", "./outages.db")
 	if err != nil {
-		print("1")
+		log.Fatal("Failed to create table", err)
 	}
 	defer outageDb.Close()
 
 	initOutageTable := `
 	CREATE TABLE IF NOT EXISTS outages (
 	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+	active INTEGER NOT NULL,
 	event_id INTEGER NOT NULL,
 	county TEXT,
 	customers_affected INTEGER NOT NULL
@@ -156,7 +181,7 @@ func main() {
 
 	_, err = outageDb.Exec(initOutageTable)
 	if err != nil {
-		print("2")
+		log.Fatal("Failed to create table", err)
 	}
 	sql_, err := outageDb.Exec("PRAGMA foreign_keys = ON")
 	if err != nil {
@@ -178,6 +203,7 @@ func main() {
 	event_id INTEGER NOT NULL,
 	lat REAL NOT NULL,
 	lon REAL NOT NULL,
+	active INTEGER NOT NULL DEFAULT 1,
 	FOREIGN KEY (event_id) REFERENCES outages(event_id) ON DELETE CASCADE
 	);`
 
@@ -190,17 +216,17 @@ func main() {
 
 	request, err := http.Get(ConfigUrl)
 	if err != nil {
-		print("3")
+		log.Fatal("Failed to reach %s. Check internet connection", ConfigUrl, err)
 	}
 
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
-		print("4")
+		log.Fatal("Failed to read the request body", err)
 	}
 
 	err = json.Unmarshal(body, &config)
 	if err != nil {
-		print("5")
+		log.Fatal("Failed to unmarshal json bytes into data struct")
 	}
 
 	authKey := []byte(config.Consumer_key_emp + ":" + config.Consumer_secret_emp)
@@ -208,27 +234,30 @@ func main() {
 
 	countiesResponse, err := http.NewRequest(http.MethodGet, c_url, nil)
 	if err != nil {
-		print("6")
+		log.Fatal("Failed to reach counties url Check internet connection", err)
 	}
 
 	countiesResponse.Header.Add("Authorization", authHeader)
 
 	outagesResponse, err := http.NewRequest(http.MethodGet, o_url, nil)
 	if err != nil {
-		print("7")
+		log.Fatal("Failed to reach outages url. Check internet connection", err)
 	}
 
 	outagesResponse.Header.Add("Authorization", authHeader)
 
 	county, err := FetchAndUnmarshal[County_t](c_url, authHeader)
 	if err != nil {
-		print("8")
+		log.Fatal("Failed to run FetchAndUnmarshal on county url", err)
 	}
 
 	outage, err := FetchAndUnmarshal[Outage_t](o_url, authHeader)
 	if err != nil {
-		print("9")
+		log.Fatal("Failed to run FetchAndUnmarshal on outage url", err)
 	}
+
+	// This entire bottom section will ultimately change in it's use case.
+	// This was just a proof of concept that I could get the data and use it.
 
 	for _, c := range county.Data {
 		for _, x := range serviceArea {
@@ -243,20 +272,22 @@ func main() {
 			}
 		}
 	}
+
+	parsedOutage := make(map[string]bool)
 	for _, o := range outage.Data {
 		geocodeUrl := fmt.Sprintf("https://geocode.maps.co/reverse?lat=%f&lon=%f&api_key=%s", o.DeviceLatitudeLocation, o.DeviceLongitudeLocation, apiKey)
 
 		rGeocodedData, err := FetchAndUnmarshal[Geocode_t](geocodeUrl, "")
 		if err != nil {
-			print("10")
+			log.Fatal("Failed to run FetchAndUnmarshal on geocode url. Check your API key.", err)
 		}
 		time.Sleep(1 * time.Second)
-
-		list := strings.Fields(rGeocodedData.Address.County)
+		countyList := strings.Fields(rGeocodedData.Address.County)
 		for _, x := range serviceArea {
-			if list[0] == x {
+			if countyList[0] == x {
 				println(rGeocodedData.Address.County)
-				_, err := outageDb.Exec("INSERT OR REPLACE INTO outages (event_id, county, customers_affected) VALUES(?, ?, ?)", o.SourceEventNumber, list[0], o.CustomersAffectedNumber)
+				parsedOutage[o.SourceEventNumber] = true
+				_, err := outageDb.Exec("INSERT OR REPLACE INTO outages (event_id, active, county, customers_affected) VALUES(?, ?, ?, ?)", o.SourceEventNumber, 1, countyList[0], o.CustomersAffectedNumber)
 				if err != nil {
 					log.Fatal(err)
 				}
@@ -279,7 +310,38 @@ func main() {
 				continue
 			}
 		}
-
 	}
+	outageRows, err := outageDb.Query("SELECT event_id FROM outages WHERE active = 1")
+	if err != nil {
+		log.Fatal("Event_ID not in outageDB", err)
+	}
+	defer outageRows.Close()
+
+	for outageRows.Next() {
+		var dbEventId string
+		if err := outageRows.Scan(&dbEventId); err != nil {
+			log.Fatal("Failed to scan", err)
+		}
+
+		if !parsedOutage[dbEventId] {
+			log.Printf("Deactivating outage: %s", dbEventId)
+
+			_, err := outageDb.Exec("UPDATE outages SET active = 0 WHERE event_id = ?", dbEventId)
+			if err != nil {
+				log.Fatal("Failed to deactivate event %s", dbEventId, err)
+			}
+
+			_, err = coordDb.Exec("UPDATE outages SET active = 0 WHERE event_id = ?", dbEventId)
+			if err != nil {
+				log.Fatal("Failed to deactivate event %s", dbEventId, err)
+			}
+		}
+	}
+
+	for x, y := range parsedOutage {
+
+		fmt.Printf("source event id: %s\n active: %v\n", x, y)
+	}
+	fmt.Printf("Len of parsedOutages %d\n", len(parsedOutage))
 
 }
