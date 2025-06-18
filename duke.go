@@ -150,7 +150,23 @@ func FetchAndUnmarshal[T any](url string, authHeader string) (*T, error) {
 // 	}
 // }
 
+func Hello(w http.ResponseWriter, req *http.Request) {
+	fmt.Fprintf(w, "hello\n")
+}
+
+func Headers(w http.ResponseWriter, req *http.Request) {
+	for name, headers := range req.Header {
+		for _, h := range headers {
+			fmt.Fprintf(w, "%v: %v\n", name, h)
+		}
+	}
+}
+
 func main() {
+	go http.HandleFunc("/hello", Hello)
+	go http.HandleFunc("/headers", Headers)
+	go http.ListenAndServe(":8090", nil)
+
 	err := godotenv.Load(".env")
 	if err != nil {
 		log.Fatal(err)
@@ -176,7 +192,8 @@ func main() {
 	active INTEGER NOT NULL,
 	event_id INTEGER NOT NULL,
 	county TEXT,
-	customers_affected INTEGER NOT NULL
+	customers_affected INTEGER NOT NULL,
+	type TEXT NOT NULL
 	);`
 
 	_, err = outageDb.Exec(initOutageTable)
@@ -296,7 +313,7 @@ func main() {
 			if countyList[0] == x {
 				println(rGeocodedData.Address.County)
 				parsedOutage[o.SourceEventNumber] = true
-				_, err := outageDb.Exec("INSERT OR REPLACE INTO outages (event_id, active, county, customers_affected) VALUES(?, ?, ?, ?)", o.SourceEventNumber, 1, countyList[0], o.CustomersAffectedNumber)
+				_, err := outageDb.Exec("INSERT OR REPLACE INTO outages (event_id, active, county, customers_affected, type) VALUES(?, ?, ?, ?, ?)", o.SourceEventNumber, 1, countyList[0], o.CustomersAffectedNumber, o.OutageCause)
 				if err != nil {
 					log.Fatal(err)
 				}
@@ -351,4 +368,6 @@ func main() {
 	fmt.Printf("Finished checking for cleared outages.\n")
 
 	fmt.Printf("Total count of outages cleared: %d\n", count)
+
+	select {}
 }
